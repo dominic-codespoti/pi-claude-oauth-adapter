@@ -16,7 +16,19 @@ const IDENTITY_BLOCK = "You are Claude Code, Anthropic's official CLI for Claude
 const CUSTOM_TYPE = "claude-oauth-docs-context";
 const READY_STATUS_KEY = "claude-oauth-ready";
 const ISSUE_STATUS_KEY = "claude-oauth-issue";
-const END_MARKERS = ["\n\n# Project Context", "\n\n<available_skills>", "\nCurrent date:"] as const;
+// Fallback boundaries for markdown-style prompts. Newer Pi versions wrap each section in an XML-ish
+// element (`<docs>`, `<project_context>`, `<skills>`, `<cwd>`); those are handled by element matching
+// in extractDocsSection, and the opening tags here guard any other layout from over-stripping.
+const END_MARKERS = [
+  "\n\n# Project Context",
+  "\n\n<project_context>",
+  "\n\n<skills>",
+  "\n\n<available_skills>",
+  "\n\n<cwd>",
+  "\nCurrent date:",
+] as const;
+const DOCS_OPEN_TAG = "<docs>";
+const DOCS_CLOSE_TAG = "</docs>";
 const PI_TOPIC_REGEX =
   /\b(pi|@mariozechner\/pi-|pi-mono|coding agent harness|pi sdk|pi extension|pi theme|pi skill|pi tui|pi package|prompt templates?|keybindings?|custom providers?|adding models?)\b/i;
 const DEFAULT_CLAUDE_CODE_VERSION = "2.1.270";
@@ -974,17 +986,30 @@ function shouldInjectDocs(prompt: string): boolean {
   return PI_TOPIC_REGEX.test(prompt);
 }
 
-function extractDocsSection(systemPrompt: string): { docsSection: string; strippedPrompt: string } | null {
-  const start = systemPrompt.indexOf(DOCS_MARKER);
-  if (start < 0) return null;
+export function extractDocsSection(systemPrompt: string): { docsSection: string; strippedPrompt: string } | null {
+  const markerStart = systemPrompt.indexOf(DOCS_MARKER);
+  if (markerStart < 0) return null;
 
+  let start = markerStart;
   let end = systemPrompt.length;
-  for (const marker of END_MARKERS) {
-    const index = systemPrompt.indexOf(marker, start);
-    if (index >= 0 && index < end) end = index;
+  let docsEnd = -1;
+
+  // Pi >= 1.x: `<docs>\nPi documentation ...\n</docs>`. Remove exactly that element so the
+  // sections that follow (notably `<project_context>` with AGENTS.md) survive intact.
+  const openTag = systemPrompt.lastIndexOf(DOCS_OPEN_TAG, markerStart);
+  const closeTag = systemPrompt.indexOf(DOCS_CLOSE_TAG, markerStart);
+  if (openTag >= 0 && closeTag >= 0 && systemPrompt.slice(openTag + DOCS_OPEN_TAG.length, markerStart).trim() === "") {
+    start = openTag;
+    docsEnd = closeTag;
+    end = closeTag + DOCS_CLOSE_TAG.length;
+  } else {
+    for (const marker of END_MARKERS) {
+      const index = systemPrompt.indexOf(marker, markerStart);
+      if (index >= 0 && index < end) end = index;
+    }
   }
 
-  const docsSection = systemPrompt.slice(start, end).trim();
+  const docsSection = systemPrompt.slice(markerStart, docsEnd >= 0 ? docsEnd : end).trim();
   const before = systemPrompt.slice(0, start).trimEnd();
   const after = systemPrompt.slice(end).trimStart();
   const strippedPrompt = [before, after].filter((part) => part.length > 0).join("\n\n").trim();

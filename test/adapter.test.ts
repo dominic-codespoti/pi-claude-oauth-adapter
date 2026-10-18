@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildBillingHeader,
   compareVersions,
+  extractDocsSection,
   extractRequiredClaudeCodeVersion,
   getClaudeFooterStatus,
   usageResponseToRateLimitHeaders,
@@ -123,5 +124,41 @@ describe("buildBillingHeader", () => {
 
   it("omits cch for non first-party endpoints", () => {
     expect(buildBillingHeader([{ role: "user", content: "hi" }], "pi", false)).not.toContain("cch=");
+  });
+});
+
+describe("extractDocsSection", () => {
+  const docs =
+    "Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: /x/README.md";
+
+  it("removes only the <docs> element from XML-sectioned prompts, keeping project context and skills", () => {
+    const prompt = [
+      "You are an expert coding assistant.",
+      "<rules>\n- be concise\n</rules>",
+      `<docs>\n${docs}\n</docs>`,
+      "<project_context>\n<project_instructions path=\"/a/AGENTS.md\">\nRoute web via subagents.\n</project_instructions>\n</project_context>",
+      "<skills>\nThe following skills provide specialized instructions.\n<available_skills>\n</available_skills>\n</skills>",
+      "<cwd>\n/home\n</cwd>",
+    ].join("\n\n");
+    const result = extractDocsSection(prompt);
+    expect(result?.docsSection).toBe(docs);
+    expect(result?.strippedPrompt).toBe(
+      prompt.replace(`<docs>\n${docs}\n</docs>\n\n`, ""),
+    );
+    expect(result?.strippedPrompt).toContain("Route web via subagents.");
+    expect(result?.strippedPrompt).toContain("<skills>\nThe following skills");
+    expect(result?.strippedPrompt).not.toContain("<docs>");
+    expect(result?.strippedPrompt).not.toContain("</docs>");
+  });
+
+  it("still stops at the legacy markdown project context heading", () => {
+    const prompt = `Intro\n\n${docs}\n\n# Project Context\n\nAGENTS rules\n\n<available_skills>\n</available_skills>`;
+    const result = extractDocsSection(prompt);
+    expect(result?.docsSection).toBe(docs);
+    expect(result?.strippedPrompt).toBe("Intro\n\n# Project Context\n\nAGENTS rules\n\n<available_skills>\n</available_skills>");
+  });
+
+  it("returns null when the docs marker is absent", () => {
+    expect(extractDocsSection("no docs here")).toBeNull();
   });
 });

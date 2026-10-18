@@ -2,6 +2,10 @@
 
 All notable changes to `pi-claude-oauth-adapter` live here.
 
+## Unreleased
+
+- Keep `AGENTS.md` project context when stripping Pi's documentation block. Pi now wraps system-prompt sections in elements (`<docs>`, `<project_context>`, `<skills>`); the docs extraction only knew the old `# Project Context` heading, so it removed everything from the docs block through `<available_skills>`, silently dropping all project instructions and the skills preamble. Extraction now removes exactly the `<docs>…</docs>` element and falls back to boundary markers (now including the new section tags) for other layouts.
+
 ## 0.2.2 — 2026-09-14
 
 - Stop blocking every request with `You're out of usage credits`: `extra_usage.disabled_reason` is set on any account that never enabled extra usage, so it no longer creates a usage-exhausted state on its own. Exhaustion now requires a spent or locked primary limit.
