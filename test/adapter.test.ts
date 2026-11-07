@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  PI_TOPIC_REGEX,
+  contextNeedsDocs,
   buildBillingHeader,
   compareVersions,
   extractDocsSection,
@@ -160,5 +162,41 @@ describe("extractDocsSection", () => {
 
   it("returns null when the docs marker is absent", () => {
     expect(extractDocsSection("no docs here")).toBeNull();
+  });
+
+  it("strips the Pi 1.3 docs element, whose wording changed to 'the harness itself'", () => {
+    const docs13 =
+      "Pi documentation (read only when the user asks about the harness itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: /x/README.md";
+    const prompt = [
+      "You are a coding assistant running inside pi, a coding agent harness.",
+      `<docs>\n${docs13}\n</docs>`,
+      "<project_context>\nrules\n</project_context>",
+    ].join("\n\n");
+    const result = extractDocsSection(prompt);
+    expect(result?.docsSection).toBe(docs13);
+    expect(result?.strippedPrompt).not.toContain("<docs>");
+    expect(result?.strippedPrompt).toContain("<project_context>\nrules\n</project_context>");
+  });
+});
+
+describe("docs reinjection trigger", () => {
+  it("fires on harness topics only, not on the bare word pi", () => {
+    for (const yes of ["how do I write a pi extension?", "Pi extensions and skills", "fix my pi-sdk session", "edit ~/.pi/agent/settings.json", "add a prompt template", "registerTool signature", "@earendil-works/pi-ai types"]) {
+      expect(PI_TOPIC_REGEX.test(yes), yes).toBe(true);
+    }
+    for (const no of ["upgrade the Raspberry Pi 5", "the pi-ui service is down", "check pi-cron jobs", "lets do it", "what is pi to 5 digits"]) {
+      expect(PI_TOPIC_REGEX.test(no), no).toBe(false);
+    }
+  });
+
+  it("stays on once any user message in the context asked about the harness (cache-stable prefix)", () => {
+    const earlier = [
+      { role: "user", content: "write a pi extension", timestamp: 1 },
+      { role: "assistant", content: [{ type: "text", text: "ok" }], timestamp: 2 },
+      { role: "user", content: "lets do it", timestamp: 3 },
+    ] as never;
+    expect(contextNeedsDocs(earlier, false)).toBe(true);
+    expect(contextNeedsDocs([{ role: "user", content: "lets do it", timestamp: 1 }] as never, false)).toBe(false);
+    expect(contextNeedsDocs([{ role: "user", content: "lets do it", timestamp: 1 }] as never, true)).toBe(true);
   });
 });

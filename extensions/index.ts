@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
@@ -9,9 +9,13 @@ import { createAssistantMessageEventStream, type Api, type AssistantMessageEvent
 // compat entry file and make the whole extension fail to load.
 import { streamSimpleAnthropic } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getDocsPath, getExamplesPath, getReadmePath } from "@earendil-works/pi-coding-agent";
 
-const DOCS_MARKER =
-  "Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):";
+// Prefix shared by every Pi release's docs section ("...asks about pi itself..." before 1.3,
+// "...asks about the harness itself..." from 1.3). Matching the full sentence broke on 1.3.
+const DOCS_MARKER = "Pi documentation (";
+const FALLBACK_DOCS_HEADER =
+  "Pi documentation (read only when the user asks about the harness itself, its SDK, extensions, themes, skills, or TUI):";
 const IDENTITY_BLOCK = "You are Claude Code, Anthropic's official CLI for Claude.";
 const CUSTOM_TYPE = "claude-oauth-docs-context";
 const READY_STATUS_KEY = "claude-oauth-ready";
@@ -29,8 +33,8 @@ const END_MARKERS = [
 ] as const;
 const DOCS_OPEN_TAG = "<docs>";
 const DOCS_CLOSE_TAG = "</docs>";
-const PI_TOPIC_REGEX =
-  /\b(pi|@mariozechner\/pi-|pi-mono|coding agent harness|pi sdk|pi extension|pi theme|pi skill|pi tui|pi package|prompt templates?|keybindings?|custom providers?|adding models?)\b/i;
+export const PI_TOPIC_REGEX =
+  /(?:\bpi[- ]?(?:sdk|extensions?|themes?|skills?|tui|packages?|mono|coding[- ]agent|harness|settings|docs?)\b|@earendil-works\/pi-|@mariozechner\/pi-|\bcoding agent harness\b|\bprompt templates?\b|\bkeybindings?\b|\bcustom providers?\b|\badding models?\b|\b(?:registerTool|registerProvider|ExtensionAPI|codemode|tool_search)\b|\.pi\/agent\b)/i;
 const DEFAULT_CLAUDE_CODE_VERSION = "2.1.270";
 // Anthropic gates newer models on the advertised Claude Code version and answers with
 // HTTP 400 `invalid_request_error` when it is too old, e.g.
@@ -986,6 +990,23 @@ function shouldInjectDocs(prompt: string): boolean {
   return PI_TOPIC_REGEX.test(prompt);
 }
 
+function userText(message: AgentMessage): string {
+  if (message.role !== "user") return "";
+  if (typeof message.content === "string") return message.content;
+  return message.content
+    .filter((part): part is TextContentPart => isObject(part) && part.type === "text" && typeof part.text === "string")
+    .map((part) => part.text)
+    .join("\n");
+}
+
+/** True once any user message in the outgoing context asks about the harness (cache-stable). */
+export function contextNeedsDocs(messages: AgentMessage[], promptMatched: boolean): boolean {
+  const scope = getEnvScope();
+  if (scope === "never") return false;
+  if (scope === "always" || promptMatched) return true;
+  return messages.some((message) => PI_TOPIC_REGEX.test(userText(message)));
+}
+
 export function extractDocsSection(systemPrompt: string): { docsSection: string; strippedPrompt: string } | null {
   const markerStart = systemPrompt.indexOf(DOCS_MARKER);
   if (markerStart < 0) return null;
@@ -1016,33 +1037,26 @@ export function extractDocsSection(systemPrompt: string): { docsSection: string;
   return { docsSection, strippedPrompt };
 }
 
-function getPiPackageRoot(): string | null {
-  const cliPath = process.argv[1];
-  if (!cliPath) return null;
-
+function buildDynamicFallbackDocsSection(): string | null {
+  let readmePath: string;
+  let docsPath: string;
+  let examplesPath: string;
   try {
-    const resolvedCliPath = realpathSync(cliPath);
-    return dirname(dirname(resolvedCliPath));
+    // Pi supplies its own SDK to extensions, so these are the running host's paths.
+    readmePath = getReadmePath();
+    docsPath = getDocsPath();
+    examplesPath = getExamplesPath();
   } catch {
     return null;
   }
-}
-
-function buildDynamicFallbackDocsSection(): string | null {
-  const piRoot = getPiPackageRoot();
-  if (!piRoot) return null;
-
-  const readmePath = join(piRoot, "README.md");
-  const docsPath = join(piRoot, "docs");
-  const examplesPath = join(piRoot, "examples");
+  if (!existsSync(readmePath)) return null;
   return [
-    DOCS_MARKER,
+    FALLBACK_DOCS_HEADER,
     `- Main documentation: ${readmePath}`,
     `- Additional docs: ${docsPath}`,
     `- Examples: ${examplesPath} (extensions, custom tools, SDK)`,
     "- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md)",
     "- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing",
-    "- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)",
   ].join("\n");
 }
 
@@ -1424,6 +1438,7 @@ export default function claudeOauthAdapter(pi: ExtensionAPI) {
   pi.on("context", (event, ctx) => {
     latestCtx = ctx;
     if (!shouldApply(ctx) || !activeTurn) return;
+    activeTurn.shouldInject = contextNeedsDocs(event.messages, activeTurn.shouldInject);
     const nextMessages = injectDocs(event.messages, activeTurn);
     log("context", {
       mode: activeTurn.mode,

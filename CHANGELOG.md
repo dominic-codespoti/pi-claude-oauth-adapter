@@ -4,6 +4,11 @@ All notable changes to `pi-claude-oauth-adapter` live here.
 
 ## Unreleased
 
+- Detect Pi's docs section by its stable `Pi documentation (` prefix. Pi 1.3 reworded the sentence ("asks about the harness itself"), so the docs block was no longer stripped and a second, fallback docs block was injected as well.
+- Build the fallback docs section from the host SDK's `getReadmePath`/`getDocsPath`/`getExamplesPath` instead of `process.argv[1]`, which points at the embedding app (for example pi-ui) rather than Pi.
+- Reinject docs only for harness topics (`pi extension`, `pi sdk`, `prompt template`, `registerTool`, `~/.pi/agent`, ...). The bare word `pi` matched almost every message on hosts named after a Raspberry Pi.
+- Keep injecting once any user message in the context asked about the harness. The docs message sits at the start of the request, so toggling it per prompt invalidated the prompt cache for the whole conversation.
+
 - Keep `AGENTS.md` project context when stripping Pi's documentation block. Pi now wraps system-prompt sections in elements (`<docs>`, `<project_context>`, `<skills>`); the docs extraction only knew the old `# Project Context` heading, so it removed everything from the docs block through `<available_skills>`, silently dropping all project instructions and the skills preamble. Extraction now removes exactly the `<docs>…</docs>` element and falls back to boundary markers (now including the new section tags) for other layouts.
 
 ## 0.2.2 — 2026-09-14
